@@ -6,7 +6,10 @@ use std::{
 	time::Duration,
 };
 
-use base64::{engine::GeneralPurpose, Engine};
+use base64::{
+	engine::{GeneralPurpose, GeneralPurposeConfig},
+	Engine,
+};
 use inotify::{Inotify, WatchMask};
 use rss::Channel;
 use tokio::{fs::OpenOptions, sync::RwLock};
@@ -16,21 +19,14 @@ use super::Merge;
 pub async fn inotify_loop(
 	src_dir: PathBuf,
 	read_articles: Arc<RwLock<BTreeSet<String>>>,
-	subscriptions: Arc<RwLock<BTreeMap<String, Channel>>>,
+	subscriptions: Arc<RwLock<BTreeMap<String, Arc<Channel>>>>,
 ) {
 	let base64 = base64::engine::general_purpose::GeneralPurpose::new(
 		&base64::alphabet::STANDARD,
-		Default::default(),
+		GeneralPurposeConfig::default(),
 	);
 	let read_dir = src_dir.join("read");
 	let sub_dir = src_dir.join("subs");
-
-	tokio::fs::create_dir_all(&read_dir)
-		.await
-		.expect("Couldn't make read dir");
-	tokio::fs::create_dir_all(&sub_dir)
-		.await
-		.expect("Couldn't make subs dir");
 
 	let mut inotify = Inotify::init().expect("Couldn't start inotify");
 	inotify
@@ -46,8 +42,16 @@ pub async fn inotify_loop(
 		.expect("Failed to watch subs dir");
 
 	refresh(&read_dir, &sub_dir, &read_articles, &subscriptions, &base64).await;
-	while let Ok(events) = inotify.read_events(&mut [0]) {
-		for _ in events.take(1) {
+	let mut counter = 0u8;
+	loop {
+		counter += 1;
+		if counter == 5
+			|| inotify
+				.read_events(&mut [0])
+				.ok()
+				.map(|mut i| i.next())
+				.is_some()
+		{
 			refresh(&read_dir, &sub_dir, &read_articles, &subscriptions, &base64).await;
 		}
 		tokio::time::sleep(Duration::from_secs(1)).await;
@@ -58,7 +62,7 @@ async fn refresh(
 	read_dir: &Path,
 	sub_dir: &Path,
 	read_articles: &Arc<RwLock<BTreeSet<String>>>,
-	subscriptions: &Arc<RwLock<BTreeMap<String, Channel>>>,
+	subscriptions: &Arc<RwLock<BTreeMap<String, Arc<Channel>>>>,
 	base64: &GeneralPurpose,
 ) {
 	{
@@ -106,10 +110,13 @@ async fn refresh(
                 continue;
             };
 			// Get the subscription's contents
-			let Ok(file) = OpenOptions::new().open(entry.path()).await else {
-                eprintln!("Couldn't read {name}");
-                continue;
-            };
+			let file = match OpenOptions::new().read(true).open(entry.path()).await {
+				Err(e) => {
+					eprintln!("Couldn't read {name}, {e}");
+					continue;
+				}
+				Ok(f) => f,
+			};
 			let file = BufReader::new(file.into_std().await);
 			let Ok(channel) = Channel::read_from(file) else {
                 eprintln!("RSS in {name} is invalid");
@@ -117,9 +124,9 @@ async fn refresh(
             };
 
 			still_in_subs.insert(pub_url.clone());
-			let sub = subscriptions.entry(pub_url).or_default();
+			let sub = Arc::make_mut(subscriptions.entry(pub_url).or_default());
 			sub.merge(&channel);
 		}
-		subscriptions.retain(|k, _| still_in_subs.contains(k))
+		subscriptions.retain(|k, _| still_in_subs.contains(k));
 	}
 }

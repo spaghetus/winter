@@ -8,6 +8,7 @@ pub struct Link {
 }
 
 // Takes an HTML page, and returns all linked RSS feeds.
+#[must_use]
 pub fn find_feed(from: &str) -> Vec<String> {
 	let link_ex = "<link[^>]*>";
 	let link_ex = regex::Regex::new(link_ex).expect("Bad link regex");
