@@ -2,6 +2,7 @@ use std::{
 	collections::{BTreeMap, BTreeSet},
 	io::BufReader,
 	path::{Path, PathBuf},
+	str::FromStr,
 	sync::Arc,
 	time::Duration,
 };
@@ -11,7 +12,7 @@ use base64::{
 	Engine,
 };
 use inotify::{Inotify, WatchMask};
-use rss::Channel;
+use syndication::Feed;
 use tokio::{fs::OpenOptions, sync::RwLock};
 
 use super::Merge;
@@ -19,7 +20,7 @@ use super::Merge;
 pub async fn inotify_loop(
 	src_dir: PathBuf,
 	read_articles: Arc<RwLock<BTreeSet<String>>>,
-	subscriptions: Arc<RwLock<BTreeMap<String, Arc<Channel>>>>,
+	subscriptions: Arc<RwLock<BTreeMap<String, Arc<Feed>>>>,
 ) {
 	let base64 = base64::engine::general_purpose::GeneralPurpose::new(
 		&base64::alphabet::STANDARD,
@@ -62,7 +63,7 @@ async fn refresh(
 	read_dir: &Path,
 	sub_dir: &Path,
 	read_articles: &Arc<RwLock<BTreeSet<String>>>,
-	subscriptions: &Arc<RwLock<BTreeMap<String, Arc<Channel>>>>,
+	subscriptions: &Arc<RwLock<BTreeMap<String, Arc<Feed>>>>,
 	base64: &GeneralPurpose,
 ) {
 	{
@@ -110,21 +111,32 @@ async fn refresh(
                 continue;
             };
 			// Get the subscription's contents
-			let file = match OpenOptions::new().read(true).open(entry.path()).await {
+			// let file = match OpenOptions::new().read(true).open(entry.path()).await {
+			// 	Err(e) => {
+			// 		eprintln!("Couldn't read {name}, {e}");
+			// 		continue;
+			// 	}
+			// 	Ok(f) => f,
+			// };
+			let file = match tokio::fs::read_to_string(entry.path()).await {
 				Err(e) => {
 					eprintln!("Couldn't read {name}, {e}");
 					continue;
 				}
 				Ok(f) => f,
 			};
-			let file = BufReader::new(file.into_std().await);
-			let Ok(channel) = Channel::read_from(file) else {
+			let Ok(channel) = Feed::from_str(&file) else {
                 eprintln!("RSS in {name} is invalid");
                 continue;
             };
 
 			still_in_subs.insert(pub_url.clone());
-			let sub = Arc::make_mut(subscriptions.entry(pub_url).or_default());
+			let sub = Arc::make_mut(subscriptions.entry(pub_url).or_insert_with(
+				|| match channel {
+					Feed::RSS(_) => Arc::new(Feed::RSS(Default::default())),
+					Feed::Atom(_) => Arc::new(Feed::Atom(Default::default())),
+				},
+			));
 			sub.merge(&channel);
 		}
 		subscriptions.retain(|k, _| still_in_subs.contains(k));

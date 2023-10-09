@@ -1,19 +1,22 @@
 use std::{
 	collections::{BTreeMap, BTreeSet},
 	fmt::{Debug, Display},
+	io::BufReader,
 	path::PathBuf,
-	sync::Arc, string::FromUtf8Error, io::BufReader,
+	string::FromUtf8Error,
+	sync::Arc, str::FromStr,
 };
 
 use base64::{
 	engine::{GeneralPurpose, GeneralPurposeConfig},
 	Engine,
 };
-use rss::Channel;
+use html_parser::Dom;
+use syndication::Feed;
 use thiserror::Error;
 use tokio::{sync::RwLock, task::JoinHandle};
 
-use crate::feed::find_feed;
+use crate::{feed::find_feed, document::DocumentNode};
 
 use self::inotify::inotify_loop;
 
@@ -27,7 +30,7 @@ pub struct Database {
 	subs_dir: PathBuf,
 	_task: JoinHandle<()>,
 	read_articles_cache: Arc<RwLock<BTreeSet<String>>>,
-	subscriptions_cache: Arc<RwLock<BTreeMap<String, Arc<Channel>>>>,
+	subscriptions_cache: Arc<RwLock<BTreeMap<String, Arc<Feed>>>>,
 	base64: GeneralPurpose,
 }
 
@@ -36,7 +39,15 @@ impl Debug for Database {
 		f.debug_struct("Database")
 			.field("src_dir", &self.src_dir)
 			.field("read_articles_cache", &self.read_articles_cache)
-			.field("subscriptions_cache", &self.subscriptions_cache)
+			.field(
+				"subscriptions_cache",
+				&self
+					.subscriptions_cache
+					.blocking_read()
+					.iter()
+					.map(|(k, v)| (k, v.to_string()))
+					.collect::<BTreeMap<_, _>>(),
+			)
 			.finish()
 	}
 }
@@ -112,13 +123,16 @@ impl Database {
 			.contains(&article_guid)
 	}
 
-	pub async fn subscribe(&self, pub_url: &str, channel: &Channel) {
+	pub async fn subscribe(&self, pub_url: &str, channel: &Feed) {
 		let sub = {
 			let mut subscriptions = self.subscriptions_cache.write().await;
-			let mut sub: Channel = subscriptions
+			let mut sub: Feed = subscriptions
 				.get(pub_url)
 				.map(|a| a.as_ref().clone())
-				.unwrap_or_default();
+				.unwrap_or_else(|| match channel {
+					Feed::Atom(_) => Feed::Atom(Default::default()),
+					Feed::RSS(_) => Feed::RSS(Default::default()),
+				});
 			sub.merge(channel);
 			let sub = Arc::new(sub);
 			subscriptions.insert(pub_url.to_string(), sub.clone());
@@ -130,15 +144,16 @@ impl Database {
 			name
 		};
 		let path = self.subs_dir.join(name);
-		let writer = tokio::fs::OpenOptions::new()
-			.create(true)
-			.truncate(true)
-			.write(true)
-			.open(path)
-			.await
-			.expect("Failed to open subscription for writing");
-		sub.write_to(writer.into_std().await)
-			.expect("Failed to write subscription");
+		// let writer = tokio::fs::OpenOptions::new()
+		// 	.create(true)
+		// 	.truncate(true)
+		// 	.write(true)
+		// 	.open(path)
+		// 	.await
+		// 	.expect("Failed to open subscription for writing");
+		// sub.write_to(writer.into_std().await)
+		// 	.expect("Failed to write subscription");
+		tokio::fs::write(path, sub.to_string());
 	}
 
 	pub async fn unsubscribe(&self, pub_url: &str) {
@@ -157,7 +172,7 @@ impl Database {
 		}
 	}
 
-	pub async fn get_subscriptions(&self) -> BTreeMap<String, Arc<Channel>> {
+	pub async fn get_subscriptions(&self) -> BTreeMap<String, Arc<Feed>> {
 		self.subscriptions_cache
 			.read()
 			.await
@@ -166,7 +181,7 @@ impl Database {
 			.collect()
 	}
 
-	pub async fn get_subscription(&self, pub_url: &str) -> Option<Arc<Channel>> {
+	pub async fn get_subscription(&self, pub_url: &str) -> Option<Arc<Feed>> {
 		self.subscriptions_cache.read().await.get(pub_url).cloned()
 	}
 }
@@ -175,61 +190,169 @@ pub trait Merge {
 	fn merge(&mut self, from: &Self);
 }
 
-impl Merge for Channel {
+impl Merge for Feed {
+	fn merge(&mut self, from: &Self) {
+		match (self, from) {
+			(Feed::Atom(l), Feed::Atom(r)) => l.merge(r),
+			(Feed::RSS(l), Feed::RSS(r)) => l.merge(r),
+			_ => {
+				eprintln!("Mismatched feeds!")
+			}
+		}
+	}
+}
+
+impl Merge for rss::Channel {
 	fn merge(&mut self, from: &Self) {
 		let guids_to_write: Vec<_> = from.items.iter().filter_map(rss::Item::guid).collect();
 		let orig_items = self.items.clone();
 		let mut new_items = from.items.clone();
-		*self = Channel {
+		*self = rss::Channel {
 			items: orig_items,
 			..from.clone()
 		};
 		self.items
-			.retain(|item| item.guid().map_or(false, |g| guids_to_write.contains(&g)));
+			.retain(|item| item.guid().map_or(false, |g| !guids_to_write.contains(&g)));
 		self.items.append(&mut new_items);
+	}
+}
+
+impl Merge for atom_syndication::Feed {
+	fn merge(&mut self, from: &Self) {
+		let guids_to_write: Vec<_> = from.entries().iter().map(atom_syndication::Entry::id).collect();
+		let mut orig_items = self.entries().to_vec();
+		let mut new_items = from.entries().to_vec();
+		orig_items.retain(|item| !guids_to_write.contains(&item.id()));
+		orig_items.append(&mut new_items);
+		let mut new = from.clone();
+		new.set_entries(orig_items);
+		*self = new;
+	}
+}
+pub struct CommonArticle {
+	pub pub_url: String,
+	pub id: String,
+	pub title: String,
+	pub authors: Vec<(String, Option<String>)>,
+	pub categories: Vec<String>,
+	pub body: DocumentNode,
+	pub links: Vec<(String, String, String)>,
+}
+
+impl CommonArticle {
+	pub fn from_feed(feed: &Feed, url: String) -> Vec<Self> {
+		match &feed {
+			Feed::Atom(a) => a
+				.entries()
+				.iter()
+				.map(|entry| CommonArticle {
+					pub_url: url.clone(),
+					id: entry.id().to_string(),
+					title: entry.title().to_string(),
+					authors: entry
+						.authors()
+						.iter()
+						.map(|person| {
+							(
+								person.name().to_string(),
+								person.email().map(ToString::to_string),
+							)
+						})
+						.collect(),
+					categories: entry
+						.categories()
+						.iter()
+						.map(|cat| cat.term().to_string())
+						.collect(),
+					body: Dom::parse(
+						entry
+							.content()
+							.and_then(atom_syndication::Content::value)
+							.unwrap_or(""),
+					)
+					.unwrap_or(Dom::parse("<i>invalid dom</i>").unwrap())
+					.into(),
+					links: entry
+						.links()
+						.iter()
+						.map(|link| {
+							(
+								link.title().unwrap_or("?").to_string(),
+								link.mime_type().unwrap_or("text/plain").to_string(),
+								link.href().to_string(),
+							)
+						})
+						.collect(),
+				})
+				.collect(),
+			Feed::RSS(r) => r
+				.items()
+				.iter()
+				.map(|item| CommonArticle {
+					pub_url: url.clone(),
+					id: item
+						.guid()
+						.map_or_else(|| "?".to_string(), |g| g.value.clone()),
+					title: item.title.clone().unwrap_or_else(|| "?".to_string()),
+					authors: item.author.clone().map(|a| (a, None)).into_iter().collect(),
+					categories: item
+						.categories()
+						.iter()
+						.map(|cat| cat.name.clone())
+						.collect(),
+					body: Dom::parse(item.content().unwrap_or("<i>empty content</i>"))
+						.unwrap_or(Dom::parse("<i>invalid dom</i>").unwrap())
+						.into(),
+					links: item
+						.link()
+						.map(|l| (l.to_string(), "text/plain".to_string(), l.to_string()))
+						.into_iter()
+						.collect(),
+				})
+				.collect(),
+		}
 	}
 }
 
 #[derive(Error, Debug)]
 pub enum ChannelFromBytesError {
-	BadRSS(#[from] rss::Error),
+	BadFeed(&'static str),
 	BadUTF8(#[from] FromUtf8Error),
 	HTMLWithLink(String),
 }
 
 impl Display for ChannelFromBytesError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{self:?}")
+	}
 }
 
-pub struct WChannel(pub Channel);
+pub struct WFeed(pub Feed);
 
-impl TryFrom<Vec<u8>> for WChannel {
-    type Error = ChannelFromBytesError;
+impl TryFrom<Vec<u8>> for WFeed {
+	type Error = ChannelFromBytesError;
 
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-		let channel = match Channel::read_from(value.as_slice()) {
+	fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+		let text = String::from_utf8(value)?;
+		let channel = match Feed::from_str(&text) {
 			Ok(c) => c,
 			Err(e) => {
-				let text = String::from_utf8(value)?;
 				if let Some(link) = find_feed(&text).first() {
 					Err(ChannelFromBytesError::HTMLWithLink(link.to_string()))?
 				} else {
-					Err(e)?
+					Err(ChannelFromBytesError::BadFeed(e))?
 				}
 			}
 		};
 		Ok(Self(channel))
-    }
+	}
 }
-
 
 #[cfg(test)]
 mod test {
 	use super::Database;
-	use rss::Channel;
 	use std::time::Duration;
+	use syndication::Feed;
 
 	#[tokio::test]
 	async fn local_usage() {
@@ -237,7 +360,8 @@ mod test {
 		dbg!(&tmp);
 		let db = Database::from_dir(tmp.path().to_path_buf());
 		db.read("TestUrl", "TestArticle").await;
-		db.subscribe("TestUrl", &Channel::default()).await;
+		db.subscribe("TestUrl", &Feed::RSS(Default::default()))
+			.await;
 		assert!(db.has_read("TestUrl", "TestArticle").await);
 		assert!(db.get_subscription("TestUrl").await.is_some());
 		tokio::time::sleep(Duration::from_secs(2)).await;
@@ -255,7 +379,8 @@ mod test {
 		let db_a = Database::from_dir(tmp.path().to_path_buf());
 		let db_b = Database::from_dir(tmp.path().to_path_buf());
 		db_a.read("TestURL", "TestArticle").await;
-		db_a.subscribe("TestUrl", &Channel::default()).await;
+		db_a.subscribe("TestUrl", &Feed::RSS(Default::default()))
+			.await;
 		for _ in 0..10 {
 			tokio::time::sleep(Duration::from_secs(1)).await;
 			if db_b.has_read("TestURL", "TestArticle").await

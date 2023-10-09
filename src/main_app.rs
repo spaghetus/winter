@@ -1,11 +1,15 @@
+use std::string::ToString;
+
 use eframe::{
 	egui::{self, ScrollArea, SidePanel, TopBottomPanel},
 	epaint::{Color32, Vec2},
 };
+use html_parser::Dom;
+use syndication::Feed;
 use tokio::runtime::Runtime;
 use winter::{
-	document::media::MaybeLoaded,
-	state::{ChannelFromBytesError, Database, WChannel},
+	document::{media::MaybeLoaded, DocumentNode},
+	state::{ChannelFromBytesError, CommonArticle, Database, WFeed},
 };
 
 pub(crate) struct MainApp {
@@ -16,13 +20,18 @@ pub(crate) struct MainApp {
 
 pub(crate) struct Selection {
 	pub(crate) channel_id: String,
-	pub(crate) article: Option<String>,
+	pub(crate) article: Option<ArticleSelection>,
+}
+
+pub(crate) struct ArticleSelection {
+	article_id: String,
+	document_node: DocumentNode,
 }
 
 #[derive(Default)]
 pub(crate) struct AddChannel {
 	pub url: String,
-	pub fetch_progress: Option<MaybeLoaded<WChannel>>,
+	pub fetch_progress: Option<MaybeLoaded<WFeed>>,
 }
 
 impl MainApp {
@@ -41,13 +50,6 @@ impl MainApp {
 	) {
 		let _rt = rt.enter();
 
-		let selected_channel = self.selection.as_ref().map(|sel| &sel.channel_id).cloned();
-		let selected_article = self
-			.selection
-			.as_ref()
-			.and_then(|sel| sel.article.as_ref())
-			.cloned();
-
 		TopBottomPanel::bottom("sidebars").show(ctx, |ui| {
 			self.bottom_panel(ui);
 		});
@@ -63,7 +65,9 @@ impl MainApp {
 		SidePanel::left("channels")
 			.show_animated(ctx, show_channels, |ui| self.channels_panel(ui, rt));
 
-		SidePanel::left("articles").show_animated(ctx, show_articles, |ui| {});
+		SidePanel::left("articles").show_animated(ctx, show_articles, |ui| {
+			self.articles_panel(ui, rt);
+		});
 
 		SidePanel::right("new_subscription").show_animated(
 			ctx,
@@ -106,7 +110,13 @@ impl MainApp {
 				Some(MaybeLoaded::Done(_, Ok(channel))) => {
 					ui.colored_label(
 						Color32::GREEN,
-						format!("OK! Got feed \"{}\".", channel.0.title()),
+						format!(
+							"OK! Got feed \"{}\".",
+							match &channel.0 {
+								Feed::RSS(r) => r.title().to_string(),
+								Feed::Atom(a) => a.title().to_string(),
+							}
+						),
 					);
 					if ui.button("Commit").clicked() {
 						rt.block_on(self.database.subscribe(&add_channel.url, &channel.0));
@@ -126,15 +136,24 @@ impl MainApp {
 		rt: &Runtime,
 	) -> egui::scroll_area::ScrollAreaOutput<()> {
 		ScrollArea::new([false, true]).show(ui, |ui| {
+			ui.set_min_size(Vec2::new(200.0, 0.0));
 			for (key, value) in rt.block_on(self.database.get_subscriptions()) {
-				if ui.button(&value.title).clicked() {
+				let title = match &*value {
+					Feed::Atom(a) => a.title().to_string(),
+					Feed::RSS(r) => r.title().to_string(),
+				};
+				let description = match &*value {
+					Feed::Atom(_) => "Atom feed, no description available",
+					Feed::RSS(r) => r.description(),
+				};
+				if ui.button(title).clicked() {
 					self.selection = Some(Selection {
 						channel_id: key.clone(),
 						article: None,
 					});
 				}
 				ui.collapsing("Description", |ui| {
-					ui.label(&value.description);
+					ui.label(description);
 					if ui.button("Unsubscribe").clicked() {
 						rt.block_on(self.database.unsubscribe(&key));
 					}
@@ -164,5 +183,51 @@ impl MainApp {
 				self.add_channel_working = Some(AddChannel::default());
 			}
 		});
+	}
+
+	fn articles_panel(&mut self, ui: &mut egui::Ui, rt: &Runtime) {
+		let Some(selection) = &mut self.selection else {
+			return;
+		};
+		let Some(channel) = rt.block_on(self.database.get_subscription(&selection.channel_id)) else {
+			self.selection = None;
+			return;
+		};
+		let articles: Vec<CommonArticle> =
+			CommonArticle::from_feed(&channel, selection.channel_id.clone());
+
+		for article in articles {
+			
+			// let link_embeds =
+			// 	article
+			// 		.links
+			// 		.into_iter()
+			// 		.map(|(label, mime, href)| DocumentNode::Link {
+			// 			url: href,
+			// 			mime,
+			// 			label: vec![DocumentNode::TextLeaf(label)],
+			// 		});
+
+			// ui.heading(article.title);
+			// ui.separator();
+			// ui.horizontal(|ui| {
+			// 	for (name, email) in article.authors {
+			// 		if let Some(email) = email {
+			// 			if ui.button(name).clicked() {
+			// 				open::that(format!("mailto:{email}")).unwrap();
+			// 			}
+			// 		} else {
+			// 			ui.label(name);
+			// 		}
+			// 	}
+			// });
+			// ui.horizontal(|ui| {
+			// 	ui.label(article.categories.)
+			// })
+
+			// for mut node in link_embeds {
+			// 	node.show(ui);
+			// }
+		}
 	}
 }

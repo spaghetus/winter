@@ -21,6 +21,7 @@ pub enum DocumentNode {
 	TextLeaf(String),
 	Link {
 		url: String,
+		mime: String,
 		label: Vec<DocumentNode>,
 	},
 	Image {
@@ -72,14 +73,44 @@ impl From<Element> for DocumentNode {
 			"ul" => Self::UList(from_iter!(value.children)),
 			"ol" => Self::OList(from_iter!(value.children)),
 			"hr" => Self::Sep,
-			"a" => Self::Link {
-				url: value
-					.attributes
-					.get("href")
-					.cloned()
-					.flatten()
-					.unwrap_or_else(|| "about:blank".to_string()),
-				label: from_iter!(value.children),
+			"a" => match value.attributes.get("type").cloned().flatten() {
+				Some(mime) if mime.starts_with("image/") => Self::Image {
+					label: "Linked image".to_string(),
+					url: value
+						.attributes
+						.get("href")
+						.cloned()
+						.flatten()
+						.unwrap_or_else(|| "about:blank".to_string()),
+				},
+				Some(mime) if mime.starts_with("audio/") => Self::Audio {
+					label: "Linked audio file".to_string(),
+					fetched: MaybeLoaded::NotStarted(value
+						.attributes
+						.get("href")
+						.cloned()
+						.flatten()
+						.unwrap_or_else(|| "about:blank".to_string())),
+				},
+				Some(mime) if mime.starts_with("video/") => Self::Video {
+					label: "Linked video file".to_string(),
+					fetched: MaybeLoaded::NotStarted(value
+						.attributes
+						.get("href")
+						.cloned()
+						.flatten()
+						.unwrap_or_else(|| "about:blank".to_string())),
+				},
+				other => Self::Link {
+					url: value
+						.attributes
+						.get("href")
+						.cloned()
+						.flatten()
+						.unwrap_or_else(|| "about:blank".to_string()),
+					mime: other.unwrap_or_else(|| "text/plain".to_string()),
+					label: from_iter!(value.children),
+				},
 			},
 			"img" => Self::Image {
 				label: value
@@ -170,7 +201,7 @@ impl DocumentNode {
 				}
 				ui.label(text);
 			}
-			DocumentNode::Link { url, label } => {
+			DocumentNode::Link { url, mime, label } => {
 				let strong =
 					ui.memory(|memory| memory.data.get_temp("strong".into()).unwrap_or(false));
 				let emph = ui.memory(|memory| memory.data.get_temp("emph".into()).unwrap_or(false));
@@ -257,7 +288,7 @@ impl ToString for DocumentNode {
 			| DocumentNode::Span(inner)
 			| DocumentNode::Emph(inner)
 			| DocumentNode::Strong(inner) => Self::many_to_string(inner.iter(), " "),
-			DocumentNode::Link { url: _, label } => Self::many_to_string(label.iter(), " "),
+			DocumentNode::Link { url: _, mime: _, label } => Self::many_to_string(label.iter(), " "),
 			DocumentNode::Image { label, url: _ }
 			| DocumentNode::Video { label, fetched: _ }
 			| DocumentNode::Audio { label, fetched: _ } => label.to_string(),
