@@ -317,12 +317,9 @@ impl CommonArticle {
 					timestamp: item
 						.pub_date()
 						.and_then(|date| DateTime::parse_from_rfc2822(date).ok())
-						.map(|d| d.with_timezone(&Local))
-						.unwrap_or(
-							DateTime::from_timestamp(0, 0)
+						.map_or(DateTime::from_timestamp(0, 0)
 								.unwrap()
-								.with_timezone(&Local),
-						),
+								.with_timezone(&Local), |d| d.with_timezone(&Local)),
 					title: item.title.clone().unwrap_or_else(|| "?".to_string()),
 					authors: item.author.clone().map(|a| (a, None)).into_iter().collect(),
 					categories: item
@@ -400,7 +397,6 @@ mod test {
 	#[tokio::test]
 	async fn local_usage() {
 		let tmp = tempdir::TempDir::new("winter_db_test").unwrap();
-		dbg!(&tmp);
 		let db = Database::from_dir(tmp.path().to_path_buf());
 		db.read("TestUrl", "TestArticle").await;
 		db.subscribe("TestUrl", &Feed::RSS(Default::default()))
@@ -408,7 +404,6 @@ mod test {
 		assert!(db.has_read("TestUrl", "TestArticle").await);
 		assert!(db.get_subscription("TestUrl").await.is_some());
 		tokio::time::sleep(Duration::from_secs(2)).await;
-		dbg!(&db);
 		assert!(db.has_read("TestUrl", "TestArticle").await);
 		assert!(db.get_subscription("TestUrl").await.is_some());
 		std::mem::drop(db);
