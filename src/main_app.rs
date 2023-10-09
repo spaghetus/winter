@@ -5,11 +5,11 @@ use eframe::{
 	epaint::{Color32, Vec2}, Frame,
 };
 use html_parser::Dom;
-use syndication::Feed;
 use tokio::runtime::Runtime;
 use winter::{
 	document::{media::MaybeLoaded, DocumentNode},
 	state::{ChannelFromBytesError, CommonArticle, Database, WFeed},
+	syndication::Feed,
 };
 
 pub(crate) struct MainApp {

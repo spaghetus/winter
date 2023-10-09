@@ -39,9 +39,9 @@ clap = { version = "4.4.6", features = ["derive"], optional = true }
 figment = { version = "0.10.11", features = ["env", "toml"], optional = true }
 serde-xml-rs = "0.6.0"
 xdg = { version = "2.5.2", optional = true }
-syndication = "0.5.0"
-atom_syndication = "0.6.0"
-rss = {version = "1.8.0"}
+# syndication = "0.5.0"
+atom_syndication = "0.12.2"
+rss = {version = "2.0.6"}
 chrono = "0.4.31"
 
 [features]

@@ -12,7 +12,7 @@ use base64::{
 	Engine,
 };
 use inotify::{Inotify, WatchMask};
-use syndication::Feed;
+use crate::syndication::Feed;
 use tokio::{fs::OpenOptions, sync::RwLock};
 
 use super::Merge;

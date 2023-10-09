@@ -15,7 +15,7 @@ use base64::{
 use chrono::{DateTime, Local, NaiveDate};
 use html_parser::Dom;
 use rss::Channel;
-use syndication::Feed;
+use crate::syndication::Feed;
 use thiserror::Error;
 use tokio::{sync::RwLock, task::JoinHandle};
 
@@ -250,11 +250,7 @@ impl CommonArticle {
 				.iter()
 				.map(|entry| CommonArticle {
 					pub_url: url.clone(),
-					timestamp: DateTime::<Local>::from_str(entry.updated()).unwrap_or(
-						DateTime::from_timestamp(0, 0)
-							.unwrap()
-							.with_timezone(&Local),
-					),
+					timestamp: entry.updated().with_timezone(&Local),
 					id: entry.id().to_string(),
 					title: entry.title().to_string(),
 					authors: entry
@@ -392,7 +388,7 @@ mod test {
 	use super::Database;
 	use rss::Channel;
 	use std::time::Duration;
-	use syndication::Feed;
+	use crate::syndication::Feed;
 
 	#[tokio::test]
 	async fn local_usage() {
