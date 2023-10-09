@@ -7,13 +7,13 @@ use winter::document::DocumentNode;
 struct App(DocumentNode, Arc<Runtime>);
 
 impl eframe::App for App {
-	fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+	fn update(&mut self, ctx: &eframe::egui::Context, frame: &mut eframe::Frame) {
 		egui_extras::install_image_loaders(ctx);
 		self.0.tick(&self.1);
 		egui::CentralPanel::default().show(ctx, |ui| {
 			ScrollArea::new([true, true]).show(ui, |ui| {
 				ui.vertical(|ui| {
-					self.0.show(ui);
+					self.0.show(ui, frame);
 				})
 			});
 		});
