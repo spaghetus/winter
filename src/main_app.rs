@@ -169,31 +169,33 @@ impl MainApp {
 	) -> egui::scroll_area::ScrollAreaOutput<()> {
 		ScrollArea::new([false, true]).show(ui, |ui| {
 			ui.set_min_size(Vec2::new(200.0, 0.0));
-			for (key, value) in rt.block_on(self.database.get_subscriptions()) {
-				let title = match &*value {
-					Feed::Atom(a) => a.title().to_string(),
-					Feed::RSS(r) => r.title().to_string(),
-				};
-				let description = match &*value {
-					Feed::Atom(_) => "Atom feed, no description available",
-					Feed::RSS(r) => r.description(),
-				};
-				if ui.button(&title).clicked() {
-					self.selection = Some(Selection {
-						channel_id: key.clone(),
-						article: None,
-					});
+			ScrollArea::new([false, true]).show(ui, |ui| {
+				for (key, value) in rt.block_on(self.database.get_subscriptions()) {
+					let title = match &*value {
+						Feed::Atom(a) => a.title().to_string(),
+						Feed::RSS(r) => r.title().to_string(),
+					};
+					let description = match &*value {
+						Feed::Atom(_) => "Atom feed, no description available",
+						Feed::RSS(r) => r.description(),
+					};
+					if ui.button(&title).clicked() {
+						self.selection = Some(Selection {
+							channel_id: key.clone(),
+							article: None,
+						});
+					}
+					CollapsingHeader::new("Description")
+						.id_source(&title)
+						.show(ui, |ui| {
+							ui.label(description);
+							if ui.button("Unsubscribe").clicked() {
+								rt.block_on(self.database.unsubscribe(&key));
+							}
+						});
+					ui.separator();
 				}
-				CollapsingHeader::new("Description")
-					.id_source(&title)
-					.show(ui, |ui| {
-						ui.label(description);
-						if ui.button("Unsubscribe").clicked() {
-							rt.block_on(self.database.unsubscribe(&key));
-						}
-					});
-				ui.separator();
-			}
+			});
 		})
 	}
 
@@ -232,27 +234,28 @@ impl MainApp {
 			CommonArticle::from_feed(&channel, selection.channel_id.clone());
 		articles.sort_by_key(|article| article.timestamp);
 		articles.reverse();
-
-		for article in articles {
-			ui.horizontal_wrapped(|ui| {
-				if ui.button(&article.title).clicked() {
-					let body = (article.body)();
-					selection.article = Some(
-						SelectedArticle {
-							article,
-							tree: body,
-							links: vec![],
-						}
-						.populate_links(rt),
-					);
-					return;
-				}
-				ui.label(article.timestamp.date_naive().to_string());
-				if rt.block_on(self.database.has_read(&selection.channel_id, &article.id)) {
-					ui.label("(read)");
-				}
-			});
-		}
+		ScrollArea::new([false, true]).show(ui, |ui| {
+			for article in articles {
+				ui.horizontal_wrapped(|ui| {
+					if ui.button(&article.title).clicked() {
+						let body = (article.body)();
+						selection.article = Some(
+							SelectedArticle {
+								article,
+								tree: body,
+								links: vec![],
+							}
+							.populate_links(rt),
+						);
+						return;
+					}
+					ui.label(article.timestamp.date_naive().to_string());
+					if rt.block_on(self.database.has_read(&selection.channel_id, &article.id)) {
+						ui.label("(read)");
+					}
+				});
+			}
+		});
 	}
 
 	fn central_panel(&mut self, ui: &mut egui::Ui, rt: &Runtime, frame: &mut Frame) {
