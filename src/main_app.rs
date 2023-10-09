@@ -1,8 +1,9 @@
-use std::string::ToString;
+use std::{collections::BTreeMap, string::ToString};
 
 use eframe::{
 	egui::{self, CentralPanel, CollapsingHeader, ScrollArea, SidePanel, TopBottomPanel},
-	epaint::{Color32, Vec2}, Frame,
+	epaint::{Color32, Vec2},
+	Frame,
 };
 
 use tokio::runtime::Runtime;
@@ -16,6 +17,7 @@ pub(crate) struct MainApp {
 	pub(crate) database: Database,
 	pub(crate) selection: Option<Selection>,
 	pub(crate) add_channel_working: Option<AddChannel>,
+	pub sub_refresh_progress: BTreeMap<String, MaybeLoaded<Feed>>,
 }
 
 pub(crate) struct Selection {
@@ -45,6 +47,21 @@ impl SelectedArticle {
 						url: href.to_string(),
 					};
 				}
+
+				if mime.starts_with("audio/") {
+					return DocumentNode::Audio {
+						label: label.to_string(),
+						fetched: MaybeLoaded::NotStarted(href.to_string()),
+					};
+				}
+
+				if mime.starts_with("video/") {
+					return DocumentNode::Video {
+						label: label.to_string(),
+						fetched: MaybeLoaded::NotStarted(href.to_string()),
+					};
+				}
+
 				DocumentNode::Link {
 					url: href.clone(),
 					mime: mime.clone(),
@@ -68,6 +85,7 @@ impl MainApp {
 			database,
 			selection: None,
 			add_channel_working: None,
+			sub_refresh_progress: BTreeMap::new(),
 		}
 	}
 	pub(crate) fn update(
@@ -167,6 +185,15 @@ impl MainApp {
 		ui: &mut egui::Ui,
 		rt: &Runtime,
 	) -> egui::scroll_area::ScrollAreaOutput<()> {
+		if ui.button("Refresh").clicked() {
+			for (key, _value) in rt.block_on(self.database.get_subscriptions()) {
+				self.sub_refresh_progress
+					.insert(key.clone(), MaybeLoaded::NotStarted(key));
+			}
+		}
+		for value in self.sub_refresh_progress.values_mut() {
+			rt.block_on(value.tick());
+		}
 		ScrollArea::new([false, true]).show(ui, |ui| {
 			ui.set_min_size(Vec2::new(200.0, 0.0));
 			ScrollArea::new([false, true]).show(ui, |ui| {
@@ -184,6 +211,25 @@ impl MainApp {
 							channel_id: key.clone(),
 							article: None,
 						});
+					}
+					match self.sub_refresh_progress.get(&key) {
+						None => {}
+						Some(MaybeLoaded::NotStarted(_) | MaybeLoaded::Working(_)) => {
+							ui.label("Reloading...");
+						}
+						Some(MaybeLoaded::Failed(_, e)) => {
+							ui.colored_label(Color32::RED, format!("failed: {e}"));
+						}
+						Some(MaybeLoaded::Done(_, Err(e))) => {
+							ui.colored_label(Color32::RED, format!("failed: {e}"));
+						}
+						Some(MaybeLoaded::BadStatus(status)) => {
+							ui.colored_label(Color32::RED, format!("failed: {status}"));
+						}
+						Some(MaybeLoaded::Done(_, Ok(channel))) => {
+							rt.block_on(self.database.subscribe(&key, channel));
+							self.sub_refresh_progress.remove(&key);
+						}
 					}
 					CollapsingHeader::new("Description")
 						.id_source(&title)
@@ -236,23 +282,29 @@ impl MainApp {
 		articles.reverse();
 		ScrollArea::new([false, true]).show(ui, |ui| {
 			for article in articles {
-				ui.horizontal_wrapped(|ui| {
-					if ui.button(&article.title).clicked() {
-						let body = (article.body)();
-						selection.article = Some(
-							SelectedArticle {
-								article,
-								tree: body,
-								links: vec![],
-							}
-							.populate_links(rt),
-						);
-						return;
-					}
-					ui.label(article.timestamp.date_naive().to_string());
+				ui.horizontal(|ui| {
 					if rt.block_on(self.database.has_read(&selection.channel_id, &article.id)) {
-						ui.label("(read)");
+						if ui.button("R").clicked() {
+							rt.block_on(self.database.unread(&selection.channel_id, &article.id));
+						}
+					} else if ui.button("x").clicked() {
+						rt.block_on(self.database.read(&selection.channel_id, &article.id));
 					}
+					ui.horizontal_wrapped(|ui| {
+						if ui.button(&article.title).clicked() {
+							let body = (article.body)();
+							selection.article = Some(
+								SelectedArticle {
+									article,
+									tree: body,
+									links: vec![],
+								}
+								.populate_links(rt),
+							);
+							return;
+						}
+						ui.label(article.timestamp.date_naive().to_string());
+					});
 				});
 			}
 		});

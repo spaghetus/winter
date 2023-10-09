@@ -7,6 +7,7 @@ use std::{
 	sync::Arc,
 };
 
+use crate::syndication::Feed;
 use base64::{
 	engine::{GeneralPurpose, GeneralPurposeConfig},
 	Engine,
@@ -14,7 +15,6 @@ use base64::{
 use chrono::{DateTime, Local};
 use html_parser::Dom;
 use rss::Channel;
-use crate::syndication::Feed;
 use thiserror::Error;
 use tokio::{sync::RwLock, task::JoinHandle};
 
@@ -313,9 +313,12 @@ impl CommonArticle {
 					timestamp: item
 						.pub_date()
 						.and_then(|date| DateTime::parse_from_rfc2822(date).ok())
-						.map_or(DateTime::from_timestamp(0, 0)
+						.map_or(
+							DateTime::from_timestamp(0, 0)
 								.unwrap()
-								.with_timezone(&Local), |d| d.with_timezone(&Local)),
+								.with_timezone(&Local),
+							|d| d.with_timezone(&Local),
+						),
 					title: item.title.clone().unwrap_or_else(|| "?".to_string()),
 					authors: item.author.clone().map(|a| (a, None)).into_iter().collect(),
 					categories: item
@@ -327,12 +330,18 @@ impl CommonArticle {
 						.link()
 						.map(|l| (l.to_string(), "text/plain".to_string(), l.to_string()))
 						.into_iter()
+						.chain(
+							item.enclosure
+								.clone()
+								.map(|encl| (("Attachment").to_string(), encl.mime_type, encl.url))
+								.into_iter(),
+						)
 						.collect(),
 					body: {
 						let content = item
 							.content
 							.clone()
-    						.or_else(|| item.description.clone())
+							.or_else(|| item.description.clone())
 							.unwrap_or_else(|| "<i>empty content</i>".to_string());
 						Box::new(move || {
 							Dom::parse(&content)
@@ -386,9 +395,9 @@ impl TryFrom<Vec<u8>> for WFeed {
 #[cfg(test)]
 mod test {
 	use super::Database;
+	use crate::syndication::Feed;
 	use rss::Channel;
 	use std::time::Duration;
-	use crate::syndication::Feed;
 
 	#[tokio::test]
 	async fn local_usage() {

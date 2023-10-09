@@ -11,7 +11,7 @@ use gui_config::Theme;
 use std::{path::PathBuf, sync::Arc};
 use tokio::runtime::Runtime;
 use winter::{
-	state::Database,
+	state::Database, document::media::TMP,
 };
 
 struct App {
@@ -120,4 +120,7 @@ fn main() {
 		Box::new(move |_| Box::new(app)),
 	)
 	.expect("App crashed");
+	if let Some(tmp) = TMP.write().unwrap().take() {
+		tmp.close().expect("Failed to destroy temporary files");
+	}
 }

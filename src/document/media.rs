@@ -3,14 +3,17 @@ use eframe::egui::Ui;
 use std::{
 	fmt::Display,
 	path::PathBuf,
-	sync::atomic::{AtomicU64, Ordering},
+	sync::{
+		atomic::{AtomicU64, Ordering},
+		RwLock,
+	},
 };
 use thiserror::Error;
 
 use crate::FETCHER;
 
 lazy_static::lazy_static! {
-	static ref TMP: tempdir::TempDir = tempdir::TempDir::new("media_cache").expect("Couldn't make temporary dir");
+	pub static ref TMP: RwLock<Option<tempdir::TempDir>> = RwLock::new(Some(tempdir::TempDir::new("media_cache").expect("Couldn't make temporary dir")));
 	static ref COUNTER: AtomicU64 = AtomicU64::new(0);
 }
 
@@ -78,10 +81,15 @@ impl TryFrom<Vec<u8>> for Video {
 	#[cfg(feature = "gui")]
 	fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
 		let path = TMP
+			.read()
+			.unwrap()
+			.as_ref()
+			.unwrap()
 			.path()
 			.to_path_buf()
 			.join(COUNTER.fetch_add(1, Ordering::Relaxed).to_string());
 		std::fs::write(&path, value)?;
+		dbg!(&path);
 		Ok(Video { cache_path: path })
 	}
 	#[cfg(not(feature = "gui"))]
@@ -120,10 +128,15 @@ impl TryFrom<Vec<u8>> for Audio {
 	#[cfg(feature = "gui")]
 	fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
 		let path = TMP
+			.read()
+			.unwrap()
+			.as_ref()
+			.unwrap()
 			.path()
 			.to_path_buf()
 			.join(COUNTER.fetch_add(1, Ordering::Relaxed).to_string());
 		std::fs::write(&path, value)?;
+		dbg!(&path);
 		Ok(Audio { cache_path: path })
 	}
 	#[cfg(not(feature = "gui"))]

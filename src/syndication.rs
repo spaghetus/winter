@@ -1,12 +1,27 @@
 /// Copied from the `syndication` crate
 /// I don't want to figure out cargo vendoring rn so I'm doing this instead
 
-use std::str::FromStr;
+use std::{str::FromStr, string::FromUtf8Error};
 
 #[derive(Clone)]
 pub enum Feed {
     Atom(atom_syndication::Feed),
     RSS(rss::Channel),
+}
+
+impl TryFrom<Vec<u8>> for Feed {
+    type Error = String;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let txt = match String::from_utf8(value) {
+            Ok(t) => t,
+            Err(e) => {return Err(e.to_string())}
+        };
+        match Feed::from_str(&txt) {
+            Ok(f) => Ok(f),
+            Err(e) => Err(e.to_string())
+        }
+    }
 }
 
 impl FromStr for Feed {
