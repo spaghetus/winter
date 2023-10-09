@@ -1,4 +1,5 @@
 use crate::FETCHER;
+use eframe::Frame;
 #[cfg(feature = "gui")]
 use eframe::egui::{Image, RichText};
 use html_parser::{Dom, DomVariant, Element, Node};
@@ -136,27 +137,27 @@ impl From<Element> for DocumentNode {
 #[cfg(feature = "gui")]
 #[allow(clippy::too_many_lines)]
 impl DocumentNode {
-	pub fn show(&mut self, ui: &mut eframe::egui::Ui) {
+	pub fn show(&mut self, ui: &mut eframe::egui::Ui, frame: &mut Frame) {
 		match self {
 			DocumentNode::Sep => {
 				ui.separator();
 			}
 			DocumentNode::Root(inner) => {
 				ui.vertical(|ui| {
-					inner.iter_mut().for_each(|el| el.show(ui));
+					inner.iter_mut().for_each(|el| el.show(ui, frame));
 				});
 			}
 			DocumentNode::Div(inner) => {
-				ui.horizontal_wrapped(|ui| inner.iter_mut().for_each(|el| el.show(ui)));
+				ui.horizontal_wrapped(|ui| inner.iter_mut().for_each(|el| el.show(ui, frame)));
 			}
 			DocumentNode::Span(inner) | DocumentNode::Unk(inner) => {
-				inner.iter_mut().for_each(|el| el.show(ui));
+				inner.iter_mut().for_each(|el| el.show(ui, frame));
 			}
 			DocumentNode::UList(inner) => {
 				for el in inner.iter_mut() {
 					ui.horizontal(|ui| {
 						ui.label("* ");
-						el.show(ui);
+						el.show(ui, frame);
 					});
 				}
 			}
@@ -164,7 +165,7 @@ impl DocumentNode {
 				for (n, el) in inner.iter_mut().enumerate() {
 					ui.horizontal(|ui| {
 						ui.label(format!("{n}. "));
-						el.show(ui);
+						el.show(ui, frame);
 					});
 				}
 			}
@@ -172,7 +173,7 @@ impl DocumentNode {
 				let orig_state =
 					ui.memory(|memory| memory.data.get_temp("italic".into()).unwrap_or(false));
 				ui.memory_mut(|memory| *memory.data.get_temp_mut_or("italic".into(), true) = true);
-				inner.iter_mut().for_each(|el| el.show(ui));
+				inner.iter_mut().for_each(|el| el.show(ui, frame));
 				ui.memory_mut(|memory| {
 					*memory.data.get_temp_mut_or("italic".into(), orig_state) = orig_state;
 				});
@@ -182,7 +183,7 @@ impl DocumentNode {
 				let orig_state =
 					ui.memory(|memory| memory.data.get_temp("strong".into()).unwrap_or(false));
 				ui.memory_mut(|memory| *memory.data.get_temp_mut_or("strong".into(), true) = true);
-				inner.iter_mut().for_each(|el| el.show(ui));
+				inner.iter_mut().for_each(|el| el.show(ui, frame));
 				ui.memory_mut(|memory| {
 					*memory.data.get_temp_mut_or("strong".into(), orig_state) = orig_state;
 				});
@@ -212,7 +213,11 @@ impl DocumentNode {
 				if emph {
 					text = text.italics();
 				}
-				if ui.button(text).clicked() {
+				let button = ui.button(text);
+				if button.clicked_by(eframe::egui::PointerButton::Middle) {
+					open::that(url).expect("Failed to open that url");
+				} else if button.clicked() {
+					frame.set_minimized(true);
 					open::that(url).expect("Failed to open that url");
 				}
 			}

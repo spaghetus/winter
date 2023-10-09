@@ -1,6 +1,6 @@
 use clap::Parser;
 use eframe::{
-	egui::{CentralPanel, },
+	egui::CentralPanel,
 	epaint::{},
 };
 use figment::{
@@ -13,7 +13,7 @@ use std::{path::PathBuf, sync::Arc};
 use tokio::runtime::Runtime;
 use winter::{
 	document::{media::MaybeLoaded, DocumentNode},
-	state::{Database},
+	state::Database,
 };
 
 struct App {

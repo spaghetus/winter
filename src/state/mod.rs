@@ -3,20 +3,23 @@ use std::{
 	fmt::{Debug, Display},
 	io::BufReader,
 	path::PathBuf,
+	str::FromStr,
 	string::FromUtf8Error,
-	sync::Arc, str::FromStr,
+	sync::Arc,
 };
 
 use base64::{
 	engine::{GeneralPurpose, GeneralPurposeConfig},
 	Engine,
 };
+use chrono::{DateTime, Local, NaiveDate};
 use html_parser::Dom;
+use rss::Channel;
 use syndication::Feed;
 use thiserror::Error;
 use tokio::{sync::RwLock, task::JoinHandle};
 
-use crate::{feed::find_feed, document::DocumentNode};
+use crate::{document::DocumentNode, feed::find_feed};
 
 use self::inotify::inotify_loop;
 
@@ -126,13 +129,13 @@ impl Database {
 	pub async fn subscribe(&self, pub_url: &str, channel: &Feed) {
 		let sub = {
 			let mut subscriptions = self.subscriptions_cache.write().await;
-			let mut sub: Feed = subscriptions
-				.get(pub_url)
-				.map(|a| a.as_ref().clone())
-				.unwrap_or_else(|| match channel {
-					Feed::Atom(_) => Feed::Atom(Default::default()),
-					Feed::RSS(_) => Feed::RSS(Default::default()),
-				});
+			let mut sub: Feed = subscriptions.get(pub_url).map_or(
+				match channel {
+					Feed::Atom(_) => Feed::Atom(atom_syndication::Feed::default()),
+					Feed::RSS(_) => Feed::RSS(Channel::default()),
+				},
+				|a| a.as_ref().clone(),
+			);
 			sub.merge(channel);
 			let sub = Arc::new(sub);
 			subscriptions.insert(pub_url.to_string(), sub.clone());
@@ -144,16 +147,9 @@ impl Database {
 			name
 		};
 		let path = self.subs_dir.join(name);
-		// let writer = tokio::fs::OpenOptions::new()
-		// 	.create(true)
-		// 	.truncate(true)
-		// 	.write(true)
-		// 	.open(path)
-		// 	.await
-		// 	.expect("Failed to open subscription for writing");
-		// sub.write_to(writer.into_std().await)
-		// 	.expect("Failed to write subscription");
-		tokio::fs::write(path, sub.to_string());
+		tokio::fs::write(path, sub.to_string())
+			.await
+			.expect("Failed to write subscription");
 	}
 
 	pub async fn unsubscribe(&self, pub_url: &str) {
@@ -219,7 +215,11 @@ impl Merge for rss::Channel {
 
 impl Merge for atom_syndication::Feed {
 	fn merge(&mut self, from: &Self) {
-		let guids_to_write: Vec<_> = from.entries().iter().map(atom_syndication::Entry::id).collect();
+		let guids_to_write: Vec<_> = from
+			.entries()
+			.iter()
+			.map(atom_syndication::Entry::id)
+			.collect();
 		let mut orig_items = self.entries().to_vec();
 		let mut new_items = from.entries().to_vec();
 		orig_items.retain(|item| !guids_to_write.contains(&item.id()));
@@ -235,11 +235,14 @@ pub struct CommonArticle {
 	pub title: String,
 	pub authors: Vec<(String, Option<String>)>,
 	pub categories: Vec<String>,
-	pub body: DocumentNode,
+	pub body: Box<dyn Fn() -> DocumentNode>,
 	pub links: Vec<(String, String, String)>,
+	pub timestamp: DateTime<Local>,
 }
 
 impl CommonArticle {
+	#[must_use]
+	#[allow(clippy::too_many_lines)]
 	pub fn from_feed(feed: &Feed, url: String) -> Vec<Self> {
 		match &feed {
 			Feed::Atom(a) => a
@@ -247,6 +250,11 @@ impl CommonArticle {
 				.iter()
 				.map(|entry| CommonArticle {
 					pub_url: url.clone(),
+					timestamp: DateTime::<Local>::from_str(entry.updated()).unwrap_or(
+						DateTime::from_timestamp(0, 0)
+							.unwrap()
+							.with_timezone(&Local),
+					),
 					id: entry.id().to_string(),
 					title: entry.title().to_string(),
 					authors: entry
@@ -264,14 +272,6 @@ impl CommonArticle {
 						.iter()
 						.map(|cat| cat.term().to_string())
 						.collect(),
-					body: Dom::parse(
-						entry
-							.content()
-							.and_then(atom_syndication::Content::value)
-							.unwrap_or(""),
-					)
-					.unwrap_or(Dom::parse("<i>invalid dom</i>").unwrap())
-					.into(),
 					links: entry
 						.links()
 						.iter()
@@ -283,6 +283,21 @@ impl CommonArticle {
 							)
 						})
 						.collect(),
+					body: {
+						let content = entry
+							.content()
+							.and_then(atom_syndication::Content::value)
+							.unwrap_or("<i>empty content</i>")
+							.to_string();
+						Box::new(move || {
+							Dom::parse(&content)
+								.unwrap_or(
+									Dom::parse("<i>invalid dom</i>")
+										.expect("default dom invalid?!"),
+								)
+								.into()
+						})
+					},
 				})
 				.collect(),
 			Feed::RSS(r) => r
@@ -290,9 +305,24 @@ impl CommonArticle {
 				.iter()
 				.map(|item| CommonArticle {
 					pub_url: url.clone(),
-					id: item
-						.guid()
-						.map_or_else(|| "?".to_string(), |g| g.value.clone()),
+					id: item.guid().map_or_else(
+						|| {
+							item.title
+								.clone()
+								.unwrap_or_else(|| "?".to_string())
+								.to_string()
+						},
+						|g| g.value.clone(),
+					),
+					timestamp: item
+						.pub_date()
+						.and_then(|date| DateTime::parse_from_rfc2822(date).ok())
+						.map(|d| d.with_timezone(&Local))
+						.unwrap_or(
+							DateTime::from_timestamp(0, 0)
+								.unwrap()
+								.with_timezone(&Local),
+						),
 					title: item.title.clone().unwrap_or_else(|| "?".to_string()),
 					authors: item.author.clone().map(|a| (a, None)).into_iter().collect(),
 					categories: item
@@ -300,14 +330,26 @@ impl CommonArticle {
 						.iter()
 						.map(|cat| cat.name.clone())
 						.collect(),
-					body: Dom::parse(item.content().unwrap_or("<i>empty content</i>"))
-						.unwrap_or(Dom::parse("<i>invalid dom</i>").unwrap())
-						.into(),
 					links: item
 						.link()
 						.map(|l| (l.to_string(), "text/plain".to_string(), l.to_string()))
 						.into_iter()
 						.collect(),
+					body: {
+						let content = item
+							.content
+							.clone()
+    						.or_else(|| item.description.clone())
+							.unwrap_or_else(|| "<i>empty content</i>".to_string());
+						Box::new(move || {
+							Dom::parse(&content)
+								.unwrap_or(
+									Dom::parse("<i>invalid dom</i>")
+										.expect("default dom invalid?!"),
+								)
+								.into()
+						})
+					},
 				})
 				.collect(),
 		}
@@ -351,6 +393,7 @@ impl TryFrom<Vec<u8>> for WFeed {
 #[cfg(test)]
 mod test {
 	use super::Database;
+	use rss::Channel;
 	use std::time::Duration;
 	use syndication::Feed;
 
@@ -379,7 +422,7 @@ mod test {
 		let db_a = Database::from_dir(tmp.path().to_path_buf());
 		let db_b = Database::from_dir(tmp.path().to_path_buf());
 		db_a.read("TestURL", "TestArticle").await;
-		db_a.subscribe("TestUrl", &Feed::RSS(Default::default()))
+		db_a.subscribe("TestUrl", &Feed::RSS(Channel::default()))
 			.await;
 		for _ in 0..10 {
 			tokio::time::sleep(Duration::from_secs(1)).await;

@@ -53,6 +53,7 @@ pub async fn inotify_loop(
 				.map(|mut i| i.next())
 				.is_some()
 		{
+			counter = 0;
 			refresh(&read_dir, &sub_dir, &read_articles, &subscriptions, &base64).await;
 		}
 		tokio::time::sleep(Duration::from_secs(1)).await;
@@ -125,9 +126,12 @@ async fn refresh(
 				}
 				Ok(f) => f,
 			};
-			let Ok(channel) = Feed::from_str(&file) else {
-                eprintln!("RSS in {name} is invalid");
-                continue;
+			let channel = match Feed::from_str(&file) {
+				Ok(c) => c,
+				Err(e) => {
+					eprintln!("RSS in {name} is invalid: {e}");
+					continue;
+				}
             };
 
 			still_in_subs.insert(pub_url.clone());
