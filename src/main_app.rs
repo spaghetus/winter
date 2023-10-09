@@ -4,7 +4,7 @@ use eframe::{
 	egui::{self, CentralPanel, CollapsingHeader, ScrollArea, SidePanel, TopBottomPanel},
 	epaint::{Color32, Vec2}, Frame,
 };
-use html_parser::Dom;
+
 use tokio::runtime::Runtime;
 use winter::{
 	document::{media::MaybeLoaded, DocumentNode},
@@ -30,7 +30,7 @@ pub(crate) struct SelectedArticle {
 }
 
 impl SelectedArticle {
-	pub fn populate_links(mut self, rt: &Runtime) -> Self {
+	pub fn populate_links(mut self, _rt: &Runtime) -> Self {
 		self.links = self
 			.article
 			.links

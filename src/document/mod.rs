@@ -1,4 +1,4 @@
-use crate::FETCHER;
+
 use eframe::Frame;
 #[cfg(feature = "gui")]
 use eframe::egui::{Image, RichText};
@@ -202,7 +202,7 @@ impl DocumentNode {
 				}
 				ui.label(text);
 			}
-			DocumentNode::Link { url, mime, label } => {
+			DocumentNode::Link { url, mime: _, label } => {
 				let strong =
 					ui.memory(|memory| memory.data.get_temp("strong".into()).unwrap_or(false));
 				let emph = ui.memory(|memory| memory.data.get_temp("emph".into()).unwrap_or(false));

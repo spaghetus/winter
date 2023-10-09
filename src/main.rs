@@ -1,18 +1,16 @@
 use clap::Parser;
 use eframe::{
 	egui::CentralPanel,
-	epaint::{},
 };
 use figment::{
 	providers::{Format, Serialized, Toml},
 	Figment, Profile,
 };
 use gui_config::Theme;
-use rss::{Channel, Item};
+
 use std::{path::PathBuf, sync::Arc};
 use tokio::runtime::Runtime;
 use winter::{
-	document::{media::MaybeLoaded, DocumentNode},
 	state::Database,
 };
 

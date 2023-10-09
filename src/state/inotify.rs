@@ -1,6 +1,5 @@
 use std::{
 	collections::{BTreeMap, BTreeSet},
-	io::BufReader,
 	path::{Path, PathBuf},
 	str::FromStr,
 	sync::Arc,
@@ -12,8 +11,9 @@ use base64::{
 	Engine,
 };
 use inotify::{Inotify, WatchMask};
+use rss::Channel;
 use crate::syndication::Feed;
-use tokio::{fs::OpenOptions, sync::RwLock};
+use tokio::{sync::RwLock};
 
 use super::Merge;
 
@@ -137,8 +137,8 @@ async fn refresh(
 			still_in_subs.insert(pub_url.clone());
 			let sub = Arc::make_mut(subscriptions.entry(pub_url).or_insert_with(
 				|| match channel {
-					Feed::RSS(_) => Arc::new(Feed::RSS(Default::default())),
-					Feed::Atom(_) => Arc::new(Feed::Atom(Default::default())),
+					Feed::RSS(_) => Arc::new(Feed::RSS(Channel::default())),
+					Feed::Atom(_) => Arc::new(Feed::Atom(atom_syndication::Feed::default())),
 				},
 			));
 			sub.merge(&channel);

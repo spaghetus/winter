@@ -1,7 +1,6 @@
 use std::{
 	collections::{BTreeMap, BTreeSet},
 	fmt::{Debug, Display},
-	io::BufReader,
 	path::PathBuf,
 	str::FromStr,
 	string::FromUtf8Error,
@@ -12,7 +11,7 @@ use base64::{
 	engine::{GeneralPurpose, GeneralPurposeConfig},
 	Engine,
 };
-use chrono::{DateTime, Local, NaiveDate};
+use chrono::{DateTime, Local};
 use html_parser::Dom;
 use rss::Channel;
 use crate::syndication::Feed;
@@ -192,7 +191,7 @@ impl Merge for Feed {
 			(Feed::Atom(l), Feed::Atom(r)) => l.merge(r),
 			(Feed::RSS(l), Feed::RSS(r)) => l.merge(r),
 			_ => {
-				eprintln!("Mismatched feeds!")
+				eprintln!("Mismatched feeds!");
 			}
 		}
 	}
@@ -243,6 +242,7 @@ pub struct CommonArticle {
 impl CommonArticle {
 	#[must_use]
 	#[allow(clippy::too_many_lines)]
+	#[allow(clippy::needless_pass_by_value)]
 	pub fn from_feed(feed: &Feed, url: String) -> Vec<Self> {
 		match &feed {
 			Feed::Atom(a) => a
@@ -395,7 +395,7 @@ mod test {
 		let tmp = tempdir::TempDir::new("winter_db_test").unwrap();
 		let db = Database::from_dir(tmp.path().to_path_buf());
 		db.read("TestUrl", "TestArticle").await;
-		db.subscribe("TestUrl", &Feed::RSS(Default::default()))
+		db.subscribe("TestUrl", &Feed::RSS(Channel::default()))
 			.await;
 		assert!(db.has_read("TestUrl", "TestArticle").await);
 		assert!(db.get_subscription("TestUrl").await.is_some());
