@@ -234,7 +234,7 @@ impl MainApp {
 		articles.reverse();
 
 		for article in articles {
-			ui.horizontal(|ui| {
+			ui.horizontal_wrapped(|ui| {
 				if ui.button(&article.title).clicked() {
 					let body = (article.body)();
 					selection.article = Some(
