@@ -7,6 +7,8 @@ use std::{
 };
 use thiserror::Error;
 
+use crate::FETCHER;
+
 lazy_static::lazy_static! {
 	static ref TMP: tempdir::TempDir = tempdir::TempDir::new("media_cache").expect("Couldn't make temporary dir");
 	static ref COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -18,6 +20,41 @@ pub enum MaybeLoaded<Inner: TryFrom<Vec<u8>>> {
 	Done(String, Result<Inner, Inner::Error>),
 	Failed(String, reqwest_middleware::Error),
 	BadStatus(u16),
+}
+
+impl<I: TryFrom<Vec<u8>>> MaybeLoaded<I> {
+	pub async fn tick(&mut self) {
+		if let MaybeLoaded::NotStarted(url) = &self {
+			let url = url.to_string();
+			FETCHER.start_download(&url).await;
+			*self = MaybeLoaded::Working(url);
+			return;
+		}
+		let MaybeLoaded::Working(url) = self else {
+					return;
+				};
+		let url = (*url).to_string();
+		let Some(completion) = FETCHER.try_finish(&url).await else {return;};
+		let response = match completion {
+			Ok(r) => r,
+			Err(e) => {
+				*self = MaybeLoaded::Failed(url.clone(), e);
+				return;
+			}
+		};
+		let status = response.status();
+		if !status.is_success() {
+			*self = MaybeLoaded::BadStatus(status.as_u16());
+			return;
+		}
+		let body: Vec<u8> = response
+			.bytes()
+			.await
+			.expect("Response body is empty?")
+			.into_iter()
+			.collect();
+		*self = MaybeLoaded::Done(url, TryInto::try_into(body));
+	}
 }
 
 pub struct Video {

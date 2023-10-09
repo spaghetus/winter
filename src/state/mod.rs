@@ -1,8 +1,8 @@
 use std::{
 	collections::{BTreeMap, BTreeSet},
-	fmt::Debug,
+	fmt::{Debug, Display},
 	path::PathBuf,
-	sync::Arc,
+	sync::Arc, string::FromUtf8Error, io::BufReader,
 };
 
 use base64::{
@@ -10,7 +10,10 @@ use base64::{
 	Engine,
 };
 use rss::Channel;
+use thiserror::Error;
 use tokio::{sync::RwLock, task::JoinHandle};
+
+use crate::feed::find_feed;
 
 use self::inotify::inotify_loop;
 
@@ -186,6 +189,41 @@ impl Merge for Channel {
 		self.items.append(&mut new_items);
 	}
 }
+
+#[derive(Error, Debug)]
+pub enum ChannelFromBytesError {
+	BadRSS(#[from] rss::Error),
+	BadUTF8(#[from] FromUtf8Error),
+	HTMLWithLink(String),
+}
+
+impl Display for ChannelFromBytesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+pub struct WChannel(pub Channel);
+
+impl TryFrom<Vec<u8>> for WChannel {
+    type Error = ChannelFromBytesError;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+		let channel = match Channel::read_from(value.as_slice()) {
+			Ok(c) => c,
+			Err(e) => {
+				let text = String::from_utf8(value)?;
+				if let Some(link) = find_feed(&text).first() {
+					Err(ChannelFromBytesError::HTMLWithLink(link.to_string()))?
+				} else {
+					Err(e)?
+				}
+			}
+		};
+		Ok(Self(channel))
+    }
+}
+
 
 #[cfg(test)]
 mod test {

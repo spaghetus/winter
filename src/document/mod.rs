@@ -238,69 +238,10 @@ impl DocumentNode {
 				}
 			}
 			DocumentNode::Video { label: _, fetched } => {
-				if let MaybeLoaded::NotStarted(url) = &fetched {
-					let url = url.to_string();
-					rt.block_on(FETCHER.start_download(&url));
-					*fetched = MaybeLoaded::Working(url);
-					return;
-				}
-				let MaybeLoaded::Working(url) = fetched else {
-					return;
-				};
-				let url = (*url).to_string();
-				let Some(completion) = rt.block_on(FETCHER.try_finish(&url)) else {return;};
-				let response = match completion {
-					Ok(r) => r,
-					Err(e) => {
-						*fetched = MaybeLoaded::Failed(url.clone(), e);
-						return;
-					}
-				};
-				let status = response.status();
-				if !status.is_success() {
-					*fetched = MaybeLoaded::BadStatus(status.as_u16());
-					return;
-				}
-				let body: Vec<u8> = rt
-					.block_on(response.bytes())
-					.expect("Response body is empty?")
-					.into_iter()
-					.collect();
-				*fetched = MaybeLoaded::Done(url, TryInto::try_into(body));
+				rt.block_on(fetched.tick());
 			}
 			DocumentNode::Audio { label: _, fetched } => {
-				if matches!(fetched, MaybeLoaded::Done(_, _)) {
-					return;
-				}
-				if let MaybeLoaded::NotStarted(url) = &fetched {
-					let url = url.to_string();
-					rt.block_on(FETCHER.start_download(&url));
-					*fetched = MaybeLoaded::Working(url);
-					return;
-				}
-				let MaybeLoaded::Working(url) = fetched else {
-					return;
-				};
-				let url = (*url).to_string();
-				let Some(completion) = rt.block_on(FETCHER.try_finish(&url)) else {return;};
-				let response = match completion {
-					Ok(r) => r,
-					Err(e) => {
-						*fetched = MaybeLoaded::Failed(url.clone(), e);
-						return;
-					}
-				};
-				let status = response.status();
-				if !status.is_success() {
-					*fetched = MaybeLoaded::BadStatus(status.as_u16());
-					return;
-				}
-				let body: Vec<u8> = rt
-					.block_on(response.bytes())
-					.expect("Response body is empty?")
-					.into_iter()
-					.collect();
-				*fetched = MaybeLoaded::Done(url, TryInto::try_into(body));
+				rt.block_on(fetched.tick());
 			}
 			_ => {}
 		}
